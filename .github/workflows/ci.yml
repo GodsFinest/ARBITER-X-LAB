@@ -1,0 +1,65 @@
+name: LAB CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  research:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: clang++-18
+            provider: source
+          - os: macos-latest
+            compiler: clang++
+            provider: installed
+    runs-on: ${{ matrix.os }}
+    env:
+      CXX: ${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: pin
+        run: echo "sha=$(cat CORE_REVISION)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        with:
+          repository: GodsFinest/ARBITER-X
+          ref: ${{ steps.pin.outputs.sha }}
+          path: _core
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang-18
+      - if: matrix.provider == 'source'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DARBITER_WARNINGS_AS_ERRORS=ON -DARBITER_X_SOURCE_DIR="$PWD/_core"
+      - if: matrix.provider == 'installed'
+        run: |
+          cmake -S _core -B core-build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DARBITER_WARNINGS_AS_ERRORS=ON
+          cmake --build core-build --parallel 2
+          cmake --install core-build --prefix "$PWD/core-prefix"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DARBITER_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$PWD/core-prefix"
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
+      - run: |
+          ./build/arbiter-lab research reproduce EXP-001
+          ./build/arbiter-lab research reproduce EXP-002
+          ./build/arbiter-lab research reproduce EXP-003
+          sh -n scripts/reproduce_all.sh
+          python3 -m py_compile tools/research/*.py
+  sanitizers:
+    runs-on: ubuntu-latest
+    env:
+      CXX: clang++-18
+      ASAN_OPTIONS: detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v5
+      - id: pin
+        run: echo "sha=$(cat CORE_REVISION)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        with:
+          repository: GodsFinest/ARBITER-X
+          ref: ${{ steps.pin.outputs.sha }}
+          path: _core
+      - run: sudo apt-get update && sudo apt-get install -y clang-18
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DARBITER_WARNINGS_AS_ERRORS=ON -DARBITER_ENABLE_SANITIZERS=ON -DARBITER_X_SOURCE_DIR="$PWD/_core"
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
